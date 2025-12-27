@@ -1,49 +1,134 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-from datetime import datetime
-import pytz
+from groq import Groq
+import asyncio
+from typing import Dict, List
+
+API_KEY = "YOUR_KEY"
+client = Groq(api_key=API_KEY)
 
 app = FastAPI()
 
-conversations = {}
+# =========================
+# STRUCTURE MEMORY
+# =========================
+class ChatMemory:
+    def __init__(self):
+        self.summary = (
+            "Mini là trợ lý AI tiếng Việt, nói chuyện vui vẻ, thân thiện, "
+            "đôi khi pha chút hài hước nhưng vẫn lịch sự và dễ hiểu."
+        )
+        self.history: List[Dict] = []
 
+# lưu riêng cho từng user
+user_sessions: Dict[str, ChatMemory] = {}
+
+# =========================
+# REQUEST BODY
+# =========================
 class Message(BaseModel):
-    device: str
+    user_id: str
     msg: str
 
-def get_time():
-    tz = pytz.timezone("Asia/Ho_Chi_Minh")
-    return datetime.now(tz).strftime("%H:%M:%S %d/%m/%Y")
 
-@app.get("/")
-def home():
-    return {"status": "Server OK", "time": get_time()}
-
+# =========================
+# MAIN CHAT ROUTE
+# =========================
 @app.post("/chat")
-def chat(data: Message):
-    device = data.device
-    msg = data.msg.strip()
+async def chat(data: Message):
+    try:
+        # Tạo session cho user nếu chưa có
+        if data.user_id not in user_sessions:
+            user_sessions[data.user_id] = ChatMemory()
 
-    if device not in conversations:
-        conversations[device] = []
+        session = user_sessions[data.user_id]
 
-    # lưu hội thoại nhưng giới hạn 50 dòng để không tràn RAM
-    if len(conversations[device]) > 50:
-        conversations[device].pop(0)
+        # ====================
+        # TẠO PROMPT
+        # ====================
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Bạn là Mini — trợ lý AI tiếng Việt, nói chuyện vui vẻ, hài hước nhẹ nhàng, "
+                    "thân thiện, nhưng vẫn chính xác và dễ hiểu."
+                )
+            },
+            {
+                "role": "system",
+                "content": f"Tóm tắt hội thoại trước đây: {session.summary}"
+            },
+        ]
 
-    conversations[device].append({"user": msg, "time": get_time()})
+        # thêm history gần nhất
+        messages += session.history
 
-    reply = (
-        "Lili đây 😎! Mình nghe rõ rồi nè.\n"
-        "📌 Mình sẽ trả lời ngắn gọn, dễ hiểu nha.\n"
-        "Bạn hỏi tiếp đi, Lili luôn sẵn sàng 😆"
-    )
+        # câu hỏi mới
+        messages.append({"role": "user", "content": data.msg})
 
-    conversations[device].append({"assistant": reply, "time": get_time()})
+        # ====================
+        # GỌI GROQ
+        # ====================
+        response = await asyncio.to_thread(
+            client.chat.completions.create,
+            model="llama-3.1-8b-instant",
+            messages=messages,
+            temperature=0.7
+        )
 
-    return {
-        "reply": reply,
-        "mode": "normal",
-        "time": get_time(),
-        "history_length": len(conversations[device])
-    }
+        reply_text = response.choices[0].message.content
+
+        if reply_text is None:
+            reply_text = "Mini hơi lag xíu… bạn thử lại nhé 😆"
+
+        # ====================
+        # CẬP NHẬT HISTORY
+        # ====================
+        session.history.append({"role": "user", "content": data.msg})
+        session.history.append({"role": "assistant", "content": reply_text})
+
+        # giữ tối đa 40 tin (20 lượt hỏi đáp)
+        if len(session.history) > 40:
+            session.history = session.history[-40:]
+
+        # ====================
+        # UPDATE SUMMARY
+        # ====================
+        summary_res = await asyncio.to_thread(
+            client.chat.completions.create,
+            model="llama-3.1-8b-instant",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Hãy tóm tắt nội dung hội thoại bằng tiếng Việt, tối đa 2 câu, "
+                        "giữ đúng ý chính, không lan man."
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Tóm tắt cũ: {session.summary}\n"
+                        f"Lịch sử mới nhất: {session.history}"
+                    )
+                }
+            ],
+            temperature=0.2
+        )
+
+        new_summary = summary_res.choices[0].message.content
+        if new_summary and len(new_summary) > 10:
+            session.summary = new_summary
+
+        return {
+            "assistant": "Mini",
+            "reply": reply_text,
+            "summary": session.summary,
+            "stored_messages": len(session.history)
+        }
+
+    except Exception as e:
+        return {
+            "assistant": "Mini",
+            "reply": f"Mini bị lỗi xíu: {str(e)} 😭",
+        }
