@@ -1,79 +1,42 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
+from deep_translator import GoogleTranslator
 from datetime import datetime
-import pytz
-from googletrans import Translator
 
 app = FastAPI()
 
-class ChatMessage(BaseModel):
-    device_id: str
-    msg: str
-
-translator = Translator()
-
-# Lưu hội thoại theo từng thiết bị
 conversations = {}
 translate_mode = {}
 
-def get_time():
-    tz = pytz.timezone("Asia/Ho_Chi_Minh")
-    return datetime.now(tz).strftime("%H:%M:%S - %d/%m/%Y")
+class Message(BaseModel):
+    device: str
+    msg: str
 
-@app.get("/")
-def home():
-    return {
-        "status": "Lili đang trực chiến nè 😎",
-        "time": get_time()
-    }
+def get_time():
+    return datetime.now().strftime("%H:%M:%S %d/%m/%Y")
+
+def translate_text(text, dest="vi"):
+    try:
+        return GoogleTranslator(source="auto", target=dest).translate(text)
+    except:
+        return text
 
 @app.post("/chat")
-def chat(data: ChatMessage):
-    device = data.device_id
-    text = data.msg.strip()
-    lower = text.lower()
+def chat(data: Message):
+    device = data.device
+    msg = data.msg
 
     if device not in conversations:
         conversations[device] = []
-    if device not in translate_mode:
         translate_mode[device] = False
 
-    # ====== TẮT DỊCH ======
-    if any(k in lower for k in ["thoát", "thoat", "normal", "bình thường", "binh thuong"]):
-        translate_mode[device] = False
-        reply = "Lili thoát chế độ dịch rồi nè 🎧. Giờ tám chuyện bình thường thôi 😆"
+    conversations[device].append({"user": msg, "time": get_time()})
 
-    # ====== BẬT DỊCH ======
-    elif "dịch" in lower or "phiên dịch" in lower:
-        translate_mode[device] = True
-        reply = "Đã bật chế độ phiên dịch 🧠✨. Cứ nói, Lili lo phần dịch!"
+    # ---------------- AI logic ----------------
+    reply = f"Lili đây nè 😆! Nghe bạn nói: '{msg}' mà vui ghê luôn!\n" \
+            f"Tôi luôn sẵn sàng giúp bạn, hỏi gì cứ quăng ra nha! ✨"
 
-    # ====== ĐANG DỊCH ======
-    elif translate_mode[device]:
-        try:
-            translated = translator.translate(text, dest='en')
-            reply = f"🔁 Dịch sang English: {translated.text}"
-        except:
-            reply = "Hình như mạng server hơi lag 😅. Thử lại nha."
-
-    # ====== HỎI GIỜ ======
-    elif "mấy giờ" in lower or "thời gian" in lower or "ngày" in lower:
-        reply = f"Bây giờ là {get_time()} ⏰ — giờ Việt Nam chuẩn luôn 😎"
-
-    # ====== CHÀO HỎI ======
-    elif "chào" in lower or "hello" in lower or "hi" in lower:
-        reply = "Hellooo 😆! Mình là Lili — AI cute nhưng nói chuyện mặn mà lắm nha 😎"
-
-    # ====== TRẢ LỜI THƯỜNG ======
-    else:
-        reply = f"Lili nghe rồi 😏: “{text}”. Nghe thú vị đó, kể thêm đi coi sao 🤭"
-
-    # Lưu lịch sử nhưng không trả ra
-    conversations[device].append({
-        "you": text,
-        "lili": reply,
-        "time": get_time()
-    })
+    conversations[device].append({"assistant": reply, "time": get_time()})
 
     return {
         "reply": reply,
