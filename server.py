@@ -4,7 +4,7 @@ from groq import Groq
 import asyncio
 from typing import Dict, List
 
-API_KEY = "YOUR_KEY"
+API_KEY = "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"
 client = Groq(api_key=API_KEY)
 
 app = FastAPI()
@@ -132,3 +132,4 @@ async def chat(data: Message):
             "assistant": "Mini",
             "reply": f"Mini bị lỗi xíu: {str(e)} 😭",
         }
+
