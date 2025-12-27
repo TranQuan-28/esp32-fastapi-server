@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 from datetime import datetime
+import pytz
 
 app = FastAPI()
 
@@ -11,7 +12,12 @@ class Message(BaseModel):
     msg: str
 
 def get_time():
-    return datetime.now().strftime("%H:%M:%S %d/%m/%Y")
+    tz = pytz.timezone("Asia/Ho_Chi_Minh")
+    return datetime.now(tz).strftime("%H:%M:%S %d/%m/%Y")
+
+@app.get("/")
+def home():
+    return {"status": "Server OK", "time": get_time()}
 
 @app.post("/chat")
 def chat(data: Message):
@@ -21,13 +27,16 @@ def chat(data: Message):
     if device not in conversations:
         conversations[device] = []
 
+    # lưu hội thoại nhưng giới hạn 50 dòng để không tràn RAM
+    if len(conversations[device]) > 50:
+        conversations[device].pop(0)
+
     conversations[device].append({"user": msg, "time": get_time()})
 
-    # ---------- AI logic đơn giản ----------
     reply = (
-        "Lili đây 😎! Mình nghe rồi nha.\n"
-        "📌 Trả lời nhanh gọn: mình đang sẵn sàng giúp bạn.\n"
-        "Bạn hỏi tiếp đi, mình không nhắc lại câu hỏi của bạn nữa đâu 😆"
+        "Lili đây 😎! Mình nghe rõ rồi nè.\n"
+        "📌 Mình sẽ trả lời ngắn gọn, dễ hiểu nha.\n"
+        "Bạn hỏi tiếp đi, Lili luôn sẵn sàng 😆"
     )
 
     conversations[device].append({"assistant": reply, "time": get_time()})
