@@ -1,4 +1,4 @@
 ﻿fastapi
 uvicorn[standard]
-groq
+pytz
 googletrans==4.0.0-rc1
