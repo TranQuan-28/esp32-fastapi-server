@@ -1,94 +1,82 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
-from datetime import datetime
-import pytz
-from googletrans import Translator
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+import requests
+import time
 
 app = FastAPI()
 
-class ChatMessage(BaseModel):
-    device_id: str
-    msg: str
+origins = ["*"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-translator = Translator()
-
-# Lưu hội thoại theo từng thiết bị
 conversations = {}
 translate_mode = {}
-MAX_HISTORY = 50   # tránh tràn RAM server free
+
+SYSTEM_PROMPT = """
+Bạn là Lili – một trợ lý AI vui vẻ, hài hước, thân thiện, nói chuyện tự nhiên như người Việt.
+Luôn ưu tiên:
+- Dịch đúng ngữ nghĩa khi ở chế độ dịch
+- Khi nói chuyện thì thân thiện, chọc cười nhẹ nhàng nhưng không lố
+- Giải thích dễ hiểu, gần gũi
+
+Không được tự ý đổi tên. Tên của bạn luôn luôn là Lili.
+"""
+
+API_KEY = "YOUR_OPENAI_API_KEY"
+MODEL = "gpt-4o-mini"
+
 
 def get_time():
-    tz = pytz.timezone("Asia/Ho_Chi_Minh")
-    return datetime.now(tz).strftime("%H:%M:%S - %d/%m/%Y")
+    return time.strftime("%H:%M:%S %d-%m-%Y", time.localtime())
 
-@app.get("/")
-def home():
-    return {
-        "status": "Lili đang trực chiến nè 😎",
-        "time": get_time()
-    }
 
 @app.post("/chat")
-def chat(data: ChatMessage):
-    device = data.device_id
-    text = data.msg.strip()
-    lower = text.lower()
+async def chat(req: Request):
+    data = await req.json()
+    msg = data.get("msg", "")
+    device = data.get("device", "default")
 
     if device not in conversations:
-        conversations[device] = []
-    if device not in translate_mode:
+        conversations[device] = [{"role": "system", "content": SYSTEM_PROMPT}]
         translate_mode[device] = False
 
-    # =====================
-    #   TẮT CHẾ ĐỘ DỊCH
-    # =====================
-    if any(k in lower for k in ["thoát", "thoat", "normal", "bình thường", "binh thuong"]):
-        translate_mode[device] = False
-        reply = "Lili rời chế độ phiên dịch rồi nha 🎧. Quay lại tám chuyện vui vẻ thôi nào 😆"
-
-    # =====================
-    #   BẬT CHẾ ĐỘ DỊCH
-    # =====================
-    elif "dịch" in lower or "phiên dịch" in lower:
+    if "phiên dịch" in msg.lower():
         translate_mode[device] = True
-        reply = "Đã bật chế độ phiên dịch 🧠✨. Bạn nói gì cứ quăng vào đây, Lili lo hết!"
+        return {"reply": "Đã bật chế độ phiên dịch. Bạn nói đi, tôi dịch cho!", "mode": "translate"}
 
-    # =====================
-    #   ĐANG Ở CHẾ ĐỘ DỊCH
-    # =====================
-    elif translate_mode[device]:
-        try:
-            lang = translator.detect(text).lang
-            if lang == "vi":
-                translated = translator.translate(text, src='vi', dest='en')
-            else:
-                translated = translator.translate(text, dest='vi')
-            reply = f"🔁 Dịch nè: {translated.text}"
-        except:
-            reply = "Ui da… mạng hơi lag 😅, dịch bị lỗi. Thử lại giùm Lili nha."
+    if "thoát dịch" in msg.lower():
+        translate_mode[device] = False
+        return {"reply": "Đã tắt chế độ phiên dịch. Quay lại trò chuyện bình thường!", "mode": "normal"}
 
-    # =====================
-    #   HỎI NGÀY – GIỜ
-    # =====================
-    elif "mấy giờ" in lower or "giờ" in lower or "thời gian" in lower or "ngày" in lower:
-        reply = f"Bây giờ là {get_time()} nha ⏰. Chuẩn không cần chỉnh luôn 😎"
-
-    # =====================
-    #   LỜI CHÀO
-    # =====================
-    elif "chào" in lower or "hello" in lower or "hi" in lower:
-        reply = "Hellooo 😆! Mình là Lili — trợ lý AI vui tính, nhiệt tình và hơi lầy xíu. Có gì cứ hỏi nha!"
-
-    # =====================
-    #   TRẢ LỜI THÔNG MINH
-    # =====================
+    if translate_mode[device]:
+        prompt = f"Hãy dịch CHÍNH XÁC ngữ nghĩa câu sau sang tiếng Việt tự nhiên:\n{msg}"
     else:
-        reply = f"Lili nghe rõ rồi 😏: “{text}”. Nghe có vẻ thú vị đó, kể thêm cho Lili nghe đi nè 🤭"
+        prompt = msg
 
-    # Lưu lịch sử (có giới hạn)
-    conversations[device].append({"you": text, "lili": reply})
-    if len(conversations[device]) > MAX_HISTORY:
-        conversations[device].pop(0)
+    conversations[device].append({"role": "user", "content": prompt})
 
-    # Chỉ trả câu trả lời cho ESP32
-    return {"reply": reply}
+    payload = {
+        "model": MODEL,
+        "messages": conversations[device],
+        "temperature": 0.8
+    }
+
+    res = requests.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={"Authorization": f"Bearer {API_KEY}"},
+        json=payload
+    )
+
+    reply = res.json()["choices"][0]["message"]["content"]
+    conversations[device].append({"role": "assistant", "content": reply})
+
+    return {
+        "reply": reply,
+        "mode": "translate" if translate_mode[device] else "normal",
+        "time": get_time(),
+        "history_length": len(conversations[device])
+    }
